@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Label Checker Live</title>
+<style>
+  :root {
+    --bg: #f4f1ea; --card: #ffffff; --ink: #1d1b18; --muted: #6b665d; --line: #e2ddd2;
+    --pass: #2f6b3a; --passbg: #e6f1e7; --fail: #9a2b1f; --failbg: #f7e4e1;
+    --accent: #6b5233; --field: #f8f5ef;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151412; --card: #1f1d1a; --ink: #ece8e0; --muted: #a39d92; --line: #34312c;
+      --passbg: #1d3322; --pass: #8fd19b; --failbg: #3a1e1a; --fail: #f0a093; --accent: #c9a978; --field: #191816; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, sans-serif; padding: 24px 16px; }
+  .top { max-width: 1040px; margin: 0 auto 18px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0; font-size: 14px; }
+  .wrap { max-width: 1040px; margin: 0 auto; display: grid; gap: 18px; grid-template-columns: 1fr 1fr; }
+  @media (max-width: 800px) { .wrap { grid-template-columns: 1fr; } }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); margin: 0 0 12px; }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  button { font: inherit; font-size: 13px; padding: 5px 11px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--field); color: var(--ink); }
+  button.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  textarea { width: 100%; min-height: 330px; resize: vertical; padding: 12px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--field); color: var(--ink);
+    font: 13px/1.5 ui-monospace, monospace; }
+  textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .status { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .badge { padding: 5px 12px; border-radius: 999px; font-weight: 700; font-size: 13px; letter-spacing: .5px; }
+  .pass { background: var(--passbg); color: var(--pass); }
+  .fail { background: var(--failbg); color: var(--fail); }
+  .summary { font-size: 14px; color: var(--muted); }
+  .issues { margin: 0 0 14px; padding: 10px 12px 10px 28px; border-radius: 8px; background: var(--failbg); color: var(--fail); font-size: 14px; }
+  .issues:empty { display: none; }
+  .row { display: grid; grid-template-columns: 22px 130px 1fr; gap: 8px; padding: 10px 0; border-top: 1px solid var(--line); align-items: start; }
+  .key { font: 12px/1.6 ui-monospace, monospace; color: var(--muted); }
+  .val { font-size: 14px; word-break: break-word; }
+  .val.empty { color: var(--fail); font-style: italic; }
+  .dot { width: 14px; height: 14px; border-radius: 50%; margin-top: 4px; }
+  .dot.ok { background: var(--pass); } .dot.no { background: var(--fail); }
+  details { margin-top: 14px; }
+  summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+  pre { background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 12px;
+    font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body>
+  <div class="top">
+    <h1>Alcohol Label Checker</h1>
+    <p class="sub">Paste or edit label text and the fixed checker runs as you type</p>
+  </div>
+
+  <div class="wrap">
+    <div class="card">
+      <h2>Label text</h2>
+      <div class="presets" id="presets"></div>
+      <textarea id="input" spellcheck="false"></textarea>
+      <p class="hint">Each line of the label goes on its own line, like OCR output.</p>
+    </div>
+
+    <div class="card">
+      <h2>Result</h2>
+      <div class="status"><span class="badge" id="badge"></span><span class="summary" id="summary"></span></div>
+      <ul class="issues" id="issues"></ul>
+      <div id="fields"></div>
+      <details><summary>Raw output (same shape the Python returns)</summary><pre id="raw"></pre></details>
+    </div>
+  </div>
+
+<script>
+/* LOGIC START: JavaScript port of label_checker_fixed.py */
+const WARNING_RE = /GOVERNMENT\s*WARNING[:.]?/i;
+
+function normalizeText(value) {
+  if (value == null) return "";
+  value = String(value);
+  value = value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  value = value.replace(/[’‘]/g, "'");
+  value = value.replace(/[–—]/g, "-");
+  value = value.replace(/﻿/g, "");
+  value = value.replace(/ /g, " ");
+  value = value.replace(/[ \t]+/g, " ");
+  value = value.replace(/\n{3,}/g, "\n\n");
+  return value.trim();
+}
+
+function isProbableFieldLine(line, allowShort = false) {
+  if (!line || line.length > 120) return false;
+  if (/(?:^|\s)(?:WARNING|ALC|ABV|PROOF|BOTTLED|IMPORTER|ORIGIN|COUNTRY|CONTENTS|ADDRESS|STATE|ZIP|CITY)\b/i.test(line)) return false;
+  if (/\d+\s*(?:%|mL|L|oz|fl\.?\s*oz)/i.test(line)) return false;
+  if (!/[A-Za-z]/.test(line)) return false;
+  const words = line.match(/[A-Za-z']+/g) || [];
+  if (!words.length) return false;
+  if (!allowShort && words.length < 2) return false;
+  return true;
+}
+
+function extractWarning(fullText) {
+  const m = WARNING_RE.exec(fullText);
+  if (!m) return "";
+  const rest = fullText.slice(m.index);
+  const end = rest.indexOf("\n\n");
+  return (end === -1 ? rest : rest.slice(0, end)).trim();
+}
+
+const ABV_RE = /\d+(?:\.\d+)?\s*%\s*(?:Alc\.?\s*\/\s*Vol\.?|Alc\.?\s*Vol\.?|ABV)\s*(?:\(\s*\d+(?:\.\d+)?\s*Proof\s*\))?|\d+(?:\.\d+)?\s*%\s*(?:alc\.|abv)/i;
+const NET_RE = /\d+(?:\.\d+)?\s*(?:mL|L|oz|fl\.?\s*oz)\b/i;
+
+function extractLabelFields(text) {
+  const fullText = normalizeText(text);
+  const lines = fullText.split("\n").map(l => l.trim()).filter(Boolean);
+  let brand = "", cls = "", abv = "", net = "";
+  const warning = extractWarning(fullText);
+
+  for (const line of lines) {
+    if (WARNING_RE.test(line)) break;
+    if (!brand && isProbableFieldLine(line, true)) { brand = line; continue; }
+    if (!cls && line !== brand && isProbableFieldLine(line)) { cls = line; continue; }
+    if (!abv) {
+      let m = line.match(ABV_RE);
+      if (m) { abv = m[0]; continue; }
+      m = line.match(/\d+(?:\.\d+)?\s*proof/i);
+      if (m && !line.toLowerCase().includes("alcohol")) { abv = line; continue; }
+    }
+    if (!net) {
+      const m = line.match(NET_RE);
+      if (m) { net = m[0]; continue; }
+    }
+  }
+
+  const candidates = lines.filter(l => !WARNING_RE.test(l));
+  if (!brand && candidates.length) brand = candidates[0];
+  if (!cls && candidates.length > 1) cls = candidates[1];
+  if (!abv) { for (const l of candidates) if (/\d+(?:\.\d+)?\s*%/.test(l)) { abv = l; break; } }
+  if (!net) { for (const l of candidates) { const m = l.match(NET_RE); if (m) { net = m[0]; break; } } }
+
+  return { brand_name: brand, class_type: cls, alcohol_content: abv, net_contents: net, warning_statement: warning };
+}
+
+function validateLabel(fields) {
+  const f = {}; for (const k in fields) f[k] = (fields[k] == null ? "" : String(fields[k])).trim();
+  const issues = [];
+  if (!f.brand_name) issues.push("Brand name is missing or unreadable.");
+  if (!f.class_type) issues.push("Class/type designation is missing or unreadable.");
+  if (!f.alcohol_content) issues.push("Alcohol content is missing or unreadable.");
+  if (!f.net_contents) issues.push("Net contents are missing or unreadable.");
+  if (!f.warning_statement || !WARNING_RE.test(f.warning_statement)) issues.push("Government warning statement is missing or not recognized.");
+  return { passed: issues.length === 0, issues,
+    summary: issues.length ? "Label needs manual review." : "Label meets the minimum inspection checks." };
+}
+/* LOGIC END */
+
+const WARN = "GOVERNMENT WARNING: (1) According to the Surgeon General, women should not drink alcoholic beverages during pregnancy because of the risk of birth defects. (2) Consumption of alcoholic beverages impairs your ability to drive a car or operate machinery, and may cause health problems.";
+const PRESETS = {
+  "Bourbon": "OLD HOLLOW\nKentucky Straight Bourbon Whiskey\n45% Alc./Vol. (90 Proof)\n750 mL\nBottled by Old Hollow Distilling Co., Bardstown, KY\n" + WARN,
+  "Craft beer": "TIDEWATER BREWING\nAmerican India Pale Ale\n6.8% ABV\n12 fl oz\nBrewed and canned in Baltimore, MD\n" + WARN,
+  "OCR, no spaces": "OLD HOLLOW\nKentucky Straight Bourbon Whiskey\n45%ALC/VOL\n750mL\nGOVERNMENTWARNING:(1)According to the Surgeon General, women should not drink alcoholic beverages during pregnancy.",
+  "Missing warning": "CASA LUNA\nBlanco Tequila\n40% Alc./Vol.\n1 L\nImported by Casa Luna Spirits, Austin, TX",
+  "Missing ABV": "VINE & STONE\nNapa Valley Cabernet Sauvignon\n750 mL\n" + WARN,
+};
+
+const input = document.getElementById("input");
+const presetsEl = document.getElementById("presets");
+const LABELS = { brand_name: "brand_name", class_type: "class_type", alcohol_content: "alcohol_content", net_contents: "net_contents", warning_statement: "warning_statement" };
+
+Object.keys(PRESETS).forEach((name, i) => {
+  const b = document.createElement("button");
+  b.textContent = name;
+  b.onclick = () => { input.value = PRESETS[name]; setActive(b); run(); };
+  presetsEl.appendChild(b);
+  if (i === 0) { input.value = PRESETS[name]; setActive(b); }
+});
+function setActive(btn) { presetsEl.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === btn)); }
+
+function esc(s) { return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+
+function run() {
+  const fields = extractLabelFields(input.value);
+  const result = validateLabel(fields);
+  const badge = document.getElementById("badge");
+  badge.textContent = result.passed ? "PASSED" : "FAILED";
+  badge.className = "badge " + (result.passed ? "pass" : "fail");
+  document.getElementById("summary").textContent = result.summary;
+  document.getElementById("issues").innerHTML = result.issues.map(i => "<li>" + esc(i) + "</li>").join("");
+  document.getElementById("fields").innerHTML = Object.keys(LABELS).map(k => {
+    const v = fields[k];
+    return '<div class="row"><span class="dot ' + (v ? "ok" : "no") + '"></span><span class="key">' + k +
+      '</span><span class="val' + (v ? "" : " empty") + '">' + (v ? esc(v) : "not found") + "</span></div>";
+  }).join("");
+  document.getElementById("raw").textContent = JSON.stringify(fields, null, 2) + "\n\n" + JSON.stringify(result, null, 2);
+}
+
+input.addEventListener("input", () => { setActive(null); run(); });
+run();
+</script>
+</body>
+</html>
