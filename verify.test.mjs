@@ -1,0 +1,12 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import{verify,WARNING}from '../docs/verify.mjs';
+const app={brand:"Stone's Throw",type:'Bourbon Whiskey',abv:'45',volume:'750 mL',producer:'Old Tom Distillery, Louisville, KY',origin:'USA'};
+const text="STONE’S THROW\nBourbon Whiskey\n45% Alc./Vol. (90 Proof)\n0.75 L\nOld Tom Distillery, Louisville, KY\nUSA\n"+WARNING;
+test('normalization and equivalent units',()=>assert.equal(verify(text,app,95,'yes').status,'match'));
+test('ABV mismatch',()=>assert.equal(verify(text,{...app,abv:'40'}).rows[2].status,'mismatch'));
+test('missing text needs review',()=>assert.equal(verify('',app).status,'review'));
+test('warning words must be exact',()=>assert.equal(verify(text.replace('birth defects','illness'),app).rows[6].status,'review'));
+test('heading capital letters required',()=>assert.equal(verify(text.replace('GOVERNMENT WARNING','Government Warning'),app).rows[7].status,'mismatch'));
+test('low confidence cannot pass automatically',()=>assert.equal(verify(text,app,50,'yes').status,'review'));
+test('bold requires visual review',()=>assert.equal(verify(text,app).status,'review'));
+test('substring brand does not match',()=>assert.equal(verify(text,{...app,brand:'Stone'}).rows[0].status,'review'));
+test('wrong volume detected',()=>assert.equal(verify(text,{...app,volume:'1 L'}).rows[3].status,'mismatch'));
